@@ -427,6 +427,8 @@ static void print_gen_help(void)
             "      --exponent EXP                          set RSA exponent EXP\n");
     printf(
             "      --attr [M R L S E D G V W U A X N]      set key attributes\n");
+    printf(
+            "      --custom-attr [id]=[true|false]         set custom bool key attributes\n");
     printf("      -h, --help                              Show this help\n\n");
 }
 
@@ -460,6 +462,8 @@ static void print_gen_des_help(void)
             "      --label LABEL                           key label LABEL to be listed\n");
     printf(
             "      --attr [M R L S E D G V W U A X N]      set key attributes\n");
+    printf(
+            "      --custom-attr [id]=[true|false]         set custom bool key attributes\n");
     printf("      -h, --help                              Show this help\n\n");
 }
 
@@ -478,6 +482,8 @@ static void print_gen_aes_help(void)
             "      --label LABEL                           key label LABEL to be listed\n");
     printf(
             "      --attr [M R L S E D G V W U A X N]      set key attributes\n");
+    printf(
+            "      --custom-attr [id]=[true|false]         set custom bool key attributes\n");
     printf("      -h, --help                              Show this help\n\n");
 }
 
@@ -497,7 +503,11 @@ static void print_gen_rsa_help(void)
     printf(
             "      --exponent EXP                          set RSA exponent EXP\n");
     printf(
-            "      --attr [S D G U X]                      set key attributes\n");
+            "      --attr [P M R L S E D G V W U A X N]    set key attributes for public and private key\n");
+    printf(
+            "      --custom-attr [id]=[true|false]         set custom bool key attributes\n");
+    printf(
+            "                     for more information enter man p11sak\n");
     printf("      -h, --help                              Show this help\n\n");
 }
 
@@ -887,6 +897,55 @@ static void set_bool_attr_from_string(CK_ATTRIBUTE *attr, char attr_char)
 }
 
 /**
+ * @brief Set the custom attrs from string object
+ * 
+ * @param attr The attribute array
+ * @param attr_char The string from the user
+ * @param count Index of current attribute in the attribute array
+ */
+static CK_RV set_custom_attrs_from_string(CK_ATTRIBUTE *attr, char *attr_char, CK_ULONG *count) 
+{
+    CK_RV rc = CKR_OK;
+    int i = 0, j = 0;
+    char substr[10];
+
+    // iterate over the single custom attributes
+    while (i < (int)strlen(attr_char))
+    {
+        int radix = 16;
+        unsigned long id = 0;
+
+        // parse attribute id from string
+        for (j = 0; attr_char[i] != '='; i++) {
+            if (j == 1 && attr_char[i] != 'x' && attr_char[i] != 'X') 
+                radix = 10;
+            substr[j] = attr_char[i];
+            j++;  
+        }
+        id = strtoul(substr, NULL, radix);
+        i++;
+
+        // set attribute in array
+        attr[*count].type = id;
+        if (strncasecmp((attr_char + i), "false", 5) == 0) {
+            attr[*count].pValue = &ckb_false;
+            i += 5;
+        } else if (strncasecmp((attr_char + i), "true", 4) == 0) {
+            attr[*count].pValue = &ckb_true;
+            i += 4;
+        } else {
+            return CKR_ATTRIBUTE_VALUE_INVALID;
+        }
+        attr[*count].ulValueLen = sizeof(CK_BBOOL);
+
+        i++; 
+        (*count)++;
+    }
+
+    return rc;
+}
+
+/**
  * Set default asymmetric key attributes.
  */
 static CK_RV set_battr(const char *attr_string, CK_ATTRIBUTE *pubattr, 
@@ -935,8 +994,9 @@ static CK_RV set_battr(const char *attr_string, CK_ATTRIBUTE *pubattr,
  * Generation of the symmetric key
  */
 static CK_RV tok_key_gen(CK_SESSION_HANDLE session, CK_ULONG keylength,
-                         CK_MECHANISM *pmech, char *attr_string,
-                         CK_OBJECT_HANDLE *phkey, char *label)
+                         CK_MECHANISM *pmech, char *attr_string, 
+                         char *custom_attr_string, CK_OBJECT_HANDLE *phkey, 
+                         char *label)
 {
     CK_RV rc;
     int i = 0;
@@ -948,8 +1008,11 @@ static CK_RV tok_key_gen(CK_SESSION_HANDLE session, CK_ULONG keylength,
     /* Non-boolean attributes */
     CK_ULONG a_value_len = keylength / 8;
 
-    /* Standard template */
-    CK_ATTRIBUTE key_attr[4 + KEY_MAX_BOOL_ATTR_COUNT] = {
+    /**Standard template 
+     * 128 is the current count of attributes defined in pkcs11types.h
+     * last updated 08.01.2022
+     */
+    CK_ATTRIBUTE key_attr[128] = {
         { CKA_TOKEN, &a_token, sizeof(CK_BBOOL) }, 
         { CKA_PRIVATE, &a_private, sizeof(CK_BBOOL) }, 
         { CKA_VALUE_LEN, &a_value_len, sizeof(CK_ULONG) }, 
@@ -960,10 +1023,21 @@ static CK_RV tok_key_gen(CK_SESSION_HANDLE session, CK_ULONG keylength,
     /* set boolean attributes, set template from string 
     attr_string length is checked in parse_gen_key_args to avoid memory problems */
     if (attr_string) {
-        for (i = 0; i < (int) strlen(attr_string); i++) {
+        for (i = 0; i < (int) strlen(attr_string) && i < (int)(sizeof(key_attr) / sizeof(CK_ATTRIBUTE)); i++) {
             set_bool_attr_from_string(&key_attr[i+num_attrs], attr_string[i]);
         }
         num_attrs += strlen(attr_string);
+    }
+
+    // set boolean custom attributes from string
+    if (custom_attr_string) {
+        rc = set_custom_attrs_from_string(key_attr, custom_attr_string, &num_attrs);
+        if (rc != CKR_OK) {
+            fprintf(stderr, "Setting custom attributes of key failed\n");
+            fprintf(stderr, "in set_custom_attrs_from_string() (error code 0x%lX: %s)\n", rc,
+                    p11_get_ckr(rc));
+            return rc;
+        }
     }
     
     /* generate key */
@@ -1947,7 +2021,7 @@ static CK_RV parse_list_key_args(char *argv[], int argc, p11sak_kt *kt,
 static CK_RV parse_gen_key_args(char *argv[], int argc, p11sak_kt *kt,
                                 CK_ULONG *keylength, char **ECcurve,
                                 CK_SLOT_ID *slot, char **pin, CK_ULONG *exponent,
-                                char **label, char **attr_string)
+                                char **label, char **attr_string, char **custom_attr_string)
 {
     CK_RV rc;
     CK_BBOOL slotIDset = CK_FALSE;
@@ -2039,6 +2113,15 @@ static CK_RV parse_gen_key_args(char *argv[], int argc, p11sak_kt *kt,
                 }
             } else {
                 fprintf(stderr, "--attr <ATTRIBUTES> argument is missing.\n");
+                return CKR_ARGUMENTS_BAD;
+            }
+            i++;
+        } else if ((strcmp(argv[i], "-c") == 0
+                || (strcmp(argv[i], "--custom-args") == 0)) == 0) {
+            if (i + 1 < argc) {
+                *custom_attr_string = argv[i + 1];
+            } else {
+                fprintf(stderr, "--custom-args <CUSTOM-ATTRIBUTES> argument is missing.\n");
                 return CKR_ARGUMENTS_BAD;
             }
             i++;
@@ -2192,15 +2275,15 @@ static CK_RV parse_remove_key_args(char *argv[], int argc, p11sak_kt *kt,
 static CK_RV parse_cmd_args(p11sak_cmd cmd, char *argv[], int argc,
                             p11sak_kt *kt, CK_ULONG *keylength, char **ECcurve,
                             CK_SLOT_ID *slot, char **pin, CK_ULONG *exponent,
-                            char **label, char **attr_string, int *long_print,
-                            CK_BBOOL *forceAll)
+                            char **label, char **attr_string, char **custom_attr_string, 
+                            int *long_print, CK_BBOOL *forceAll)
 {
     CK_RV rc;
 
     switch (cmd) {
     case gen_key:
         rc = parse_gen_key_args(argv, argc, kt, keylength, ECcurve, slot, pin,
-                exponent, label, attr_string);
+                exponent, label, attr_string, custom_attr_string);
         break;
     case list_key:
         rc = parse_list_key_args(argv, argc, kt, keylength, slot, pin,
@@ -2222,7 +2305,7 @@ static CK_RV parse_cmd_args(p11sak_cmd cmd, char *argv[], int argc,
  */
 static CK_RV generate_symmetric_key(CK_SESSION_HANDLE session, p11sak_kt kt,
                                     CK_ULONG keylength, char *label,
-                                    char *attr_string)
+                                    char *attr_string, char *custom_attr_string)
 {
     CK_OBJECT_HANDLE hkey;
     CK_MECHANISM mech;
@@ -2238,7 +2321,7 @@ static CK_RV generate_symmetric_key(CK_SESSION_HANDLE session, p11sak_kt kt,
         goto done;
     }
 
-    rc = tok_key_gen(session, keylength, &mech, attr_string, &hkey, label);
+    rc = tok_key_gen(session, keylength, &mech, attr_string, custom_attr_string, &hkey, label);
     if (rc != CKR_OK) {
         fprintf(stderr, "Key generation failed (error code 0x%lX: %s)\n", rc,
                 p11_get_ckr(rc));
@@ -2254,10 +2337,11 @@ done:
 /**
  * Generate an asymmetric key.
  */
-static CK_RV generate_asymmetric_key(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
+static CK_RV generate_asymmetric_key(CK_SESSION_HANDLE session, CK_SLOT_ID slot, 
                                      p11sak_kt kt, CK_ULONG keylength,
                                      CK_ULONG exponent, char *ECcurve,
-                                     char *label, char *attr_string)
+                                     char *label, char *attr_string, 
+                                     char *custom_attr_string)
 {
     CK_OBJECT_HANDLE pub_keyh, prv_keyh;
     CK_ATTRIBUTE pub_attr[KEY_MAX_BOOL_ATTR_COUNT + 2];
@@ -2267,6 +2351,7 @@ static CK_RV generate_asymmetric_key(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
     CK_MECHANISM mech;
     CK_ULONG i;
     CK_RV rc;
+    char separator = ':';
 
     memset(pub_attr, 0, sizeof(pub_attr));
     memset(prv_attr, 0, sizeof(prv_attr));
@@ -2312,6 +2397,52 @@ static CK_RV generate_asymmetric_key(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
         goto done;
     }
 
+    // set boolean custom attributes from string
+    if (custom_attr_string) {
+        char *ret = strchr(custom_attr_string, separator); 
+        /**
+         * if the separator sign is not in the string the custom attributes apply for 
+         * public and private key
+         * else the attributes in front of the separator sign are set for the public 
+         * key and the ones behind are set for the private key
+         */
+        if (ret == NULL) {
+            rc = set_custom_attrs_from_string(pub_attr, custom_attr_string, &pub_acount);
+            if (rc != CKR_OK) {
+                fprintf(stderr, "Setting custom attributes of public key failed\n");
+                fprintf(stderr, "in set_custom_attrs_from_string() (error code 0x%lX: %s)\n", rc,
+                        p11_get_ckr(rc));
+                return rc;
+            }
+            rc = set_custom_attrs_from_string(prv_attr, custom_attr_string, &prv_acount);
+            if (rc != CKR_OK) {
+                fprintf(stderr, "Setting custom attributes of private key failed\n");
+                fprintf(stderr, "in set_custom_attrs_from_string() (error code 0x%lX: %s)\n", rc,
+                        p11_get_ckr(rc));
+                return rc;
+            }
+        } else {
+            rc = set_custom_attrs_from_string(prv_attr, ret+1, &prv_acount);
+            if (rc != CKR_OK) {
+                fprintf(stderr, "Setting custom attributes of private key failed\n");
+                fprintf(stderr, "in set_custom_attrs_from_string() (error code 0x%lX: %s)\n", rc,
+                        p11_get_ckr(rc));
+                return rc;
+            }
+            *ret = '\0';
+            rc = set_custom_attrs_from_string(pub_attr, attr_string, &pub_acount);
+            if (rc != CKR_OK) {
+                fprintf(stderr, "Setting custom attributes of public key failed\n");
+                fprintf(stderr, "in set_custom_attrs_from_string() (error code 0x%lX: %s)\n", rc,
+                        p11_get_ckr(rc));
+                *ret = separator;
+                return rc;
+            }
+            *ret = separator;
+        }
+    }
+    
+
     rc = key_pair_gen(session, kt, &mech, pub_attr, pub_acount, prv_attr,
             prv_acount, &pub_keyh, &prv_keyh);
     if (rc != CKR_OK) {
@@ -2351,18 +2482,19 @@ done:
  */
 static CK_RV generate_ckey(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
                            p11sak_kt kt, CK_ULONG keylength, char *ECcurve,
-                           CK_ULONG exponent, char *label, char *attr_string)
+                           CK_ULONG exponent, char *label, char *attr_string, 
+                           char *custom_attr_string)
 {
     switch (kt) {
     case kt_DES:
     case kt_3DES:
     case kt_AES:
         return generate_symmetric_key(session, kt, keylength, label,
-                attr_string);
+                attr_string, custom_attr_string);
     case kt_RSAPKCS:
     case kt_EC:
         return generate_asymmetric_key(session, slot, kt, keylength, exponent,
-                ECcurve, label, attr_string);
+                ECcurve, label, attr_string, custom_attr_string);
     default:
         fprintf(stderr, "Error: cannot create a key of type %i (%s)\n", kt, kt2str(kt));
         return CKR_ARGUMENTS_BAD;
@@ -2677,13 +2809,13 @@ done:
 static CK_RV execute_cmd(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
                          p11sak_cmd cmd, p11sak_kt kt, CK_ULONG keylength,
                          CK_ULONG exponent, char *ECcurve, char *label,
-                         char *attr_string, int long_print, CK_BBOOL *forceAll)
+                         char *attr_string, char *custom_attr_string, int long_print, CK_BBOOL *forceAll)
 {
     CK_RV rc;
     switch (cmd) {
     case gen_key:
         rc = generate_ckey(session, slot, kt, keylength, ECcurve, exponent,
-                label, attr_string);
+                label, attr_string, custom_attr_string);
         break;
     case list_key:
         rc = list_ckey(session, kt, long_print);
@@ -2825,6 +2957,7 @@ int main(int argc, char *argv[])
     char *label = NULL;
     char *ECcurve = NULL;
     char *attr_string = NULL;
+    char *custom_attr_string = NULL;
     CK_ULONG keylength = 0;
     CK_RV rc = CKR_OK;
     CK_SESSION_HANDLE session;
@@ -2850,7 +2983,7 @@ int main(int argc, char *argv[])
 
     /* Parse command args */
     rc = parse_cmd_args(cmd, argv, argc, &kt, &keylength, &ECcurve, &slot, &pin,
-            &exponent, &label, &attr_string, &long_print, &forceAll);
+            &exponent, &label, &attr_string, &custom_attr_string, &long_print, &forceAll);
     if (rc != CKR_OK) {
         goto done;
     }
@@ -2897,7 +3030,7 @@ int main(int argc, char *argv[])
 
     /* Execute command */
     rc = execute_cmd(session, slot, cmd, kt, keylength, exponent, ECcurve,
-            label, attr_string, long_print, &forceAll);
+            label, attr_string, custom_attr_string, long_print, &forceAll);
     if (rc == CKR_CANCEL) {
         fprintf(stderr, "Cancel execution: p11sak %s command (error code 0x%lX: %s)\n", cmd2str(cmd), rc,
                 p11_get_ckr(rc));

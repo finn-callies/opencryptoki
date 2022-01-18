@@ -416,6 +416,26 @@ From Example above: CKA_MODIFIABLE=true, CKA_LOCAL=false, CKA_DECRYPT=true
 .
 .
 .
+.SS "\-\-custom\-attr"
+Here additional custom boolean attributes can be defined, which cannot be set with the 
+.B \-\-attr 
+option. The added attributes have be of the following syntax and are separated by a ",":
+.PP
+.B 0x00000170=false,0x00000103=true
+.PP
+This sets the CKA_MODIFIABLE attribute to false and CKA_SENSITIVE to true. The string must not contain any spaces. 
+The attribute id can be set in decimal or hexadecimal notation.
+.PP
+For asymmetric keys a user can set different custom attributes for the public and the private key.
+The separator is the symbol ":". The defined attributes in front of the separator are set for the
+public key and the attributes defined after the separator are set for the private key. When the 
+separator is not in the string, the defined attribute set is used for public and private key. To set 
+a configuration for only the public key, the string has to end with the separator and respectively, 
+to use a configuration for the private key only, the string has to start with the separator.
+.PP
+.
+.
+.
 .SS "\-\-long | \-l"
 prints the
 .B list-key
