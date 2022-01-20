@@ -946,14 +946,32 @@ static CK_RV set_custom_attrs_from_string(char *attr_char, CK_ATTRIBUTE *attr, C
         if (strncasecmp((attr_char + i), "false", 5) == 0) {
             attr[*count].pValue = &ckb_false;
             i += 5;
+            attr[*count].ulValueLen = sizeof(CK_BBOOL);
         } else if (strncasecmp((attr_char + i), "true", 4) == 0) {
             attr[*count].pValue = &ckb_true;
             i += 4;
+            attr[*count].ulValueLen = sizeof(CK_BBOOL);
         } else {
-            return CKR_ATTRIBUTE_VALUE_INVALID;
-        }
-        attr[*count].ulValueLen = sizeof(CK_BBOOL);
+            // if not boolean, a CK_ULONG value is assumed
+            radix = 16;
+            id = 0;
+            for (j = 0; attr_char[(i + j)] != ',' && attr_char[(i + j)] != '\0'; j++) {
+                if (j == 1 && attr_char[i + j] != 'x' && attr_char[i + j] != 'X')
+                    radix = 10;
+                substr[j] = attr_char[i + j];
+            }
+            substr[j] = '\0';
+            id = (int)strtoul(substr, NULL, radix);
 
+            attr[*count].pValue = malloc(sizeof(CK_ULONG));
+            memcpy(attr[*count].pValue, &id, sizeof(CK_ULONG));
+
+            i += j; 
+            attr[*count].ulValueLen = sizeof(CK_BBOOL);
+
+            printf("%lu\n", *(CK_ULONG*) attr[*count].pValue);
+        }
+    
         i++; 
         (*count)++;
     }
@@ -1052,7 +1070,7 @@ static CK_RV tok_key_gen(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
                          CK_OBJECT_HANDLE *phkey, char *label)
 {
     CK_RV rc;
-    int i = 0;
+    int i = 0, j = 0;
 
     /* Boolean attributes (cannot be specified by user) */
     CK_BBOOL a_token = ckb_true; // always true
@@ -1070,11 +1088,12 @@ static CK_RV tok_key_gen(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
         { CKA_LABEL, label, strlen(label) } 
     };
     CK_ULONG num_attrs = 3;
+    j = (int) num_attrs;
     
     /* set boolean attributes, set template from string 
     attr_string length is checked in parse_gen_key_args to avoid memory problems */
     if (attr_string) {
-        for (i = 0; i < (int) strlen(attr_string) && i < (int)(sizeof(key_attr) / sizeof(CK_ATTRIBUTE)); i++) {
+        for (i = 3; i < (int) strlen(attr_string) && i < (int)(sizeof(key_attr) / sizeof(CK_ATTRIBUTE)); i++) {
             set_bool_attr_from_string(&key_attr[i+num_attrs], attr_string[i]);
         }
         num_attrs += strlen(attr_string);
@@ -1111,6 +1130,13 @@ static CK_RV tok_key_gen(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
                     p11_get_ckr(rc));
         }
     }
+
+    /* free CK_ULONG attributes in array */
+    for (; j < (int)(sizeof(key_attr) / sizeof(CK_ATTRIBUTE)); j++) {
+        if (key_attr[j].ulValueLen == sizeof(CK_ULONG)) 
+            free(key_attr[j].pValue);
+    }
+
     return rc;
 }
 /**
