@@ -30,6 +30,8 @@
 
 static const char *default_pkcs11lib = "libopencryptoki.so";
 
+CK_BYTE *a_prime, *a_subprime, *a_base;
+
 static void *pkcs11lib = NULL;
 static CK_FUNCTION_LIST *funcs = NULL;
 
@@ -168,6 +170,8 @@ static const char* kt2str(p11sak_kt ktype)
         return "AES";
     case kt_RSAPKCS:
         return "RSA_PKCS";
+    case kt_DSA:
+        return "DSA";
     case kt_EC:
         return "EC";
     case kt_GENERIC:
@@ -203,6 +207,9 @@ static CK_RV kt2CKK(p11sak_kt ktype, CK_KEY_TYPE *a_key_type)
         break;
     case kt_RSAPKCS:
         *a_key_type = CKK_RSA;
+        break;
+    case kt_DSA:
+        *a_key_type = CKK_DSA;
         break;
     case kt_EC:
         *a_key_type = CKK_EC;
@@ -391,6 +398,7 @@ static void print_listkeys_help(void)
     printf("      3des\n");
     printf("      aes\n");
     printf("      rsa\n");
+    printf("      dsa\n");
     printf("      ec\n");
     printf("      public\n");
     printf("      private\n");
@@ -412,6 +420,7 @@ static void print_gen_help(void)
     printf("      3des\n");
     printf("      aes [128 | 192 | 256]\n");
     printf("      rsa [1024 | 2048 | 4096]\n");
+    printf("      dsa ( dsa keylen depends on dsa params in config file )\n");
     printf("      ec [prime256v1 | prime192v1 | secp224r1 | secp384r1 | secp521r1 | secp256k1 | \n");
     printf("          brainpoolP160r1 | brainpoolP160t1 | brainpoolP192r1 | brainpoolP192t1 | \n");
     printf("          brainpoolP224r1 | brainpoolP224t1 | brainpoolP256r1 | brainpoolP256t1 | \n");
@@ -438,6 +447,7 @@ static void print_removekeys_help(void)
     printf("      3des\n");
     printf("      aes\n");
     printf("      rsa\n");
+    printf("      dsa\n");
     printf("      ec\n");
     printf("\n Options:\n");
     printf(
@@ -642,6 +652,190 @@ static CK_RV read_rsa_args(CK_ULONG modulusbits, CK_ULONG exponent,
 
     return CKR_OK;
 }
+
+/**
+ * Parse Byte count from string with hex bytes
+ */
+static int a2CK_BYTEstring (char a[]) 
+{
+    int i = 0, count = 0;
+    for (i = 0; i < (int) strlen(a); i++) {
+        if (a[i] == ',') {
+            count++;
+        }
+    }
+
+    // count has to be the number of occurences of ',' in a, +1
+    if (count)
+        count++;
+    
+    return count;
+}
+
+/**
+ * Parsing String to CK_BYTE array
+ */
+static void a2CK_BYTE (char a[], CK_BYTE byte_array[], int* len) 
+{
+    char *substr = NULL;
+    char *separator = ",";
+    int count = 0;
+    int base = 0;
+
+    substr = strtok(a, separator);
+    while (substr != NULL && count < len) {
+        byte_array[count] = strtol(substr, NULL, base);
+        count++;
+    }
+}
+
+static CK_RV parse_dsa_file(char *file_loc, struct ConfigBaseNode *dsa_cfg) {
+    FILE *fp;
+    printf("open\n");
+
+    // open and parse file
+    if ((fp = fopen(file_loc, "r")) == NULL) {
+        fprintf(stderr, "Failed to load %s: %s\n", file_loc, strerror(errno));
+        return CKR_ARGUMENTS_BAD;
+    }
+    printf("parse\n");
+    if (parse_configlib_file(fp, &dsa_cfg, error_hook, 0)) {
+        fprintf(stderr, "Failed to parse %s\n", file_loc);
+        fclose(fp);
+        return CKR_DATA_INVALID;
+    }
+    printf("close\n");
+    fclose(fp);
+
+    return CKR_OK;
+}
+
+/**
+ * Parsing DSA arguments CKA_PRIME, CKA_SUBPRIME, CKA_BASE from config file
+ * p11sak_defined_attrs.conf
+ */
+static CK_RV read_dsa_args(CK_ATTRIBUTE *pubattr, CK_ULONG *pubcount, char *dsa_file)
+{
+    printf("test\n");
+    CK_RV rc = CKR_OK;
+    int f;
+    struct ConfigBaseNode *dsa_cfg = NULL, *c, *dsa_publ_prime, *dsa_publ_subprime, *dsa_publ_base;
+    struct ConfigStructNode *structnode;
+    int def_args = 0;
+    int len_prime = 0, len_subprime = 0, len_base = 0; 
+
+    rc = parse_dsa_file(dsa_file, dsa_cfg);
+    if (rc != CKR_OK) {
+        printf("return\n");
+        return rc;
+    }
+    
+    if (dsa_cfg != NULL)
+    {
+        printf("test\n");
+        confignode_foreach(c, dsa_cfg, f) {
+            printf("test\n");
+            if (confignode_hastype(c, CT_STRUCT) && strcmp(c->key, "dsa_args") == 0) {
+                printf("test\n");
+                def_args = 1;
+                // parse...
+                structnode = confignode_to_struct(c);
+                dsa_publ_prime = confignode_find(structnode->value, "dsa_publ_prime");
+                dsa_publ_subprime = confignode_find(structnode->value, "dsa_publ_subprime");
+                dsa_publ_base = confignode_find(structnode->value, "dsa_publ_base");
+
+                // checking syntax of attribute...
+                if (dsa_publ_prime == NULL) {
+                    fprintf(stderr, "Missing dsa_publ_prime in Attribute in line %hu\n", c->line);
+                    return CKR_DATA_INVALID;
+                } else if (!confignode_hastype(dsa_publ_prime, CT_STRINGVAL)) {
+                    fprintf(stderr, "Invalid dsa_publ_prime in Attribute in line %hu\n", dsa_publ_prime->line);
+                    return CKR_DATA_INVALID;
+                } else if (dsa_publ_subprime == NULL) {
+                    fprintf(stderr, "Missing dsa_publ_subprime in Attribute in line %hu\n", c->line);
+                    return CKR_DATA_INVALID;
+                } else if (!confignode_hastype(dsa_publ_subprime, CT_STRINGVAL)) {
+                    fprintf(stderr, "Invalid dsa_publ_subprime in Attribute in line %hu\n", dsa_publ_subprime->line);
+                    return CKR_DATA_INVALID;
+                } else if (dsa_publ_base == NULL) {
+                    fprintf(stderr, "Missing dsa_publ_base in Attribute in line %hu\n", c->line);
+                    return CKR_DATA_INVALID;
+                } else if (!confignode_hastype(dsa_publ_base, CT_STRINGVAL)) {
+                    fprintf(stderr, "Invalid dsa_publ_base in Attribute in line %hu\n", dsa_publ_base->line);
+                    return CKR_DATA_INVALID;
+                }
+
+                // parsing CK_BYTE count of CKA_PRIME in config file...
+                len_prime = a2CK_BYTEstring(confignode_to_stringval(dsa_publ_prime)->value);
+                if (len_prime == 0) {
+                    fprintf(stderr, "Invalid dsa_publ_prime in Attribute in line %hu\n", dsa_publ_prime->line);
+                    return CKR_DATA_INVALID;
+                } else {
+                    if (!(a_prime = malloc(len_prime))) {
+                        fprintf(stderr, "Error: failed to allocate memory for prime.\n");
+                        return CKR_HOST_MEMORY;
+                    } 
+                }
+
+                // parsing CK_BYTE count of CKA_SUBPRIME in config file...
+                len_subprime = a2CK_BYTEstring(confignode_to_stringval(dsa_publ_subprime)->value);
+                if (len_subprime == 0) {
+                    fprintf(stderr, "Invalid dsa_publ_subprime in Attribute in line %hu\n", dsa_publ_subprime->line);
+                    return CKR_DATA_INVALID;
+                } else {
+                    if (!(a_subprime = malloc(len_subprime))) {
+                        fprintf(stderr, "Error: failed to allocate memory for subprime.\n");
+                        return CKR_HOST_MEMORY;
+                    }
+                }
+                
+                // parsing CK_BYTE count of CKA_BASE in config file...
+                len_base = a2CK_BYTEstring(confignode_to_stringval(dsa_publ_base)->value);
+                if (len_base == 0) {
+                    fprintf(stderr, "Invalid dsa_publ_base in Attribute in line %hu\n", dsa_publ_base->line);
+                    return CKR_DATA_INVALID;
+                } else {
+                    if (!(a_base = malloc(len_base))) {
+                        fprintf(stderr, "Error: failed to allocate memory for base.\n");
+                        return CKR_HOST_MEMORY;
+                    } 
+                }
+
+                // parsing strings from config file to CK_BYTE array...
+                a2CK_BYTE(confignode_to_stringval(dsa_publ_prime)->value, a_prime, &len_prime);
+                a2CK_BYTE(confignode_to_stringval(dsa_publ_subprime)->value, a_subprime, &len_subprime);
+                a2CK_BYTE(confignode_to_stringval(dsa_publ_base)->value, a_base, &len_base);
+
+                // setting DSA attributes...
+                pubattr[*pubcount].type = CKA_PRIME;
+                pubattr[*pubcount].pValue = &a_prime[0];
+                pubattr[*pubcount].ulValueLen = len_prime;
+                dump_attr(&pubattr[*pubcount]);
+                (*pubcount)++;
+                pubattr[*pubcount].type = CKA_SUBPRIME;
+                pubattr[*pubcount].pValue = &a_subprime[0];
+                pubattr[*pubcount].ulValueLen = len_subprime;
+                dump_attr(&pubattr[*pubcount]);
+                (*pubcount)++;
+                pubattr[*pubcount].type = CKA_BASE;
+                pubattr[*pubcount].pValue = &a_base[0];
+                pubattr[*pubcount].ulValueLen = len_base;
+                dump_attr(&pubattr[*pubcount]);
+                (*pubcount)++;
+            } 
+        }
+        if (def_args == 0)
+        {
+            fprintf(stderr, "No DSA arguments found.");
+            return CKR_DATA_INVALID;
+        }
+    } else {
+        printf("else\n");
+    }
+
+    return rc;
+}
+
 /**
  * Builds the CKA_EC_PARAMS attribute from the given ECcurve.
  */
@@ -774,6 +968,9 @@ static CK_RV key_pair_gen_mech(p11sak_kt kt, CK_MECHANISM *pmech)
         break;
     case kt_RSAPKCS:
         pmech->mechanism = CKM_RSA_PKCS_KEY_PAIR_GEN;
+        break;
+    case kt_DSA:
+        pmech->mechanism = CKM_DSA_KEY_PAIR_GEN;
         break;
     case kt_EC:
         pmech->mechanism = CKM_EC_KEY_PAIR_GEN;
@@ -1062,6 +1259,7 @@ static CK_RV tok_key_list_init(CK_SESSION_HANDLE session, p11sak_kt kt,
     case kt_AES:
     case kt_GENERIC:
     case kt_RSAPKCS:
+    case kt_DSA:
     case kt_EC:
         tmplt[2].type = CKA_KEY_TYPE;
         tmplt[2].pValue = &a_key_type;
@@ -1695,6 +1893,7 @@ static CK_RV check_args_gen_key(p11sak_kt *kt, CK_ULONG keylength,
     switch (*kt) {
     case kt_DES:
     case kt_3DES:
+    case kt_DSA:
         break;
     case kt_AES:
         if ((keylength == 128) || (keylength == 192) || (keylength == 256)) {
@@ -1744,6 +1943,7 @@ static CK_RV check_args_list_key(p11sak_kt *kt)
     switch (*kt) {
     case kt_AES:
     case kt_RSAPKCS:
+    case kt_DSA:
     case kt_DES:
     case kt_3DES:
     case kt_EC:
@@ -1771,6 +1971,7 @@ static CK_RV check_args_remove_key(p11sak_kt *kt)
     case kt_3DES:
     case kt_AES:
     case kt_RSAPKCS:
+    case kt_DSA:
     case kt_EC:
     case kt_GENERIC:
     case kt_SECRET:
@@ -1864,6 +2065,8 @@ static CK_RV parse_list_key_args(char *argv[], int argc, p11sak_kt *kt,
             *kt = kt_AES;
         } else if (strcmp(argv[i], "RSA") == 0 || strcmp(argv[i], "rsa") == 0) {
             *kt = kt_RSAPKCS;
+        } else if (strcmp(argv[i], "DSA") == 0 || strcmp(argv[i], "dsa") == 0) {
+            *kt = kt_DSA;
         } else if (strcmp(argv[i], "EC") == 0 || strcmp(argv[i], "ec") == 0) {
             *kt = kt_EC;
         } else if (strcmp(argv[i], "GENERIC") == 0
@@ -1947,7 +2150,7 @@ static CK_RV parse_list_key_args(char *argv[], int argc, p11sak_kt *kt,
 static CK_RV parse_gen_key_args(char *argv[], int argc, p11sak_kt *kt,
                                 CK_ULONG *keylength, char **ECcurve,
                                 CK_SLOT_ID *slot, char **pin, CK_ULONG *exponent,
-                                char **label, char **attr_string)
+                                char **label, char **attr_string, char **dsa_file)
 {
     CK_RV rc;
     CK_BBOOL slotIDset = CK_FALSE;
@@ -1972,6 +2175,17 @@ static CK_RV parse_gen_key_args(char *argv[], int argc, p11sak_kt *kt,
         } else if (strcmp(argv[i], "RSA") == 0 || strcmp(argv[i], "rsa") == 0) {
             *kt = kt_RSAPKCS;
             *keylength = get_ulong_arg(i + 1, argv, argc);
+            i++;
+        } else if (strcmp(argv[i], "DSA") == 0 || strcmp(argv[i], "dsa") == 0) {
+            *kt = kt_DSA;
+            if (argv[i + 1]) {
+                printf("strlen: %d", (int) strlen(argv[i + 1]));
+                *dsa_file = malloc((int) strlen(argv[i + 1]));
+                if (*dsa_file) {
+                    strcpy(*dsa_file, argv[i + 1]);
+                }
+            }
+            printf("str: %s\n", *dsa_file);
             i++;
         } else if (strcmp(argv[i], "EC") == 0 || strcmp(argv[i], "ec") == 0) {
             *kt = kt_EC;
@@ -2110,6 +2324,8 @@ static CK_RV parse_remove_key_args(char *argv[], int argc, p11sak_kt *kt,
             *kt = kt_AES;
         } else if (strcmp(argv[i], "RSA") == 0 || strcmp(argv[i], "rsa") == 0) {
             *kt = kt_RSAPKCS;
+        } else if (strcmp(argv[i], "DSA") == 0 || strcmp(argv[i], "dsa") == 0) {
+            *kt = kt_DSA;
         } else if (strcmp(argv[i], "EC") == 0 || strcmp(argv[i], "ec") == 0) {
             *kt = kt_EC;
             /* Get options */
@@ -2193,14 +2409,14 @@ static CK_RV parse_cmd_args(p11sak_cmd cmd, char *argv[], int argc,
                             p11sak_kt *kt, CK_ULONG *keylength, char **ECcurve,
                             CK_SLOT_ID *slot, char **pin, CK_ULONG *exponent,
                             char **label, char **attr_string, int *long_print,
-                            CK_BBOOL *forceAll)
+                            CK_BBOOL *forceAll, char **dsa_file)
 {
     CK_RV rc;
 
     switch (cmd) {
     case gen_key:
         rc = parse_gen_key_args(argv, argc, kt, keylength, ECcurve, slot, pin,
-                exponent, label, attr_string);
+                exponent, label, attr_string, dsa_file);
         break;
     case list_key:
         rc = parse_list_key_args(argv, argc, kt, keylength, slot, pin,
@@ -2257,7 +2473,7 @@ done:
 static CK_RV generate_asymmetric_key(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
                                      p11sak_kt kt, CK_ULONG keylength,
                                      CK_ULONG exponent, char *ECcurve,
-                                     char *label, char *attr_string)
+                                     char *label, char *attr_string, char *dsa_file)
 {
     CK_OBJECT_HANDLE pub_keyh, prv_keyh;
     CK_ATTRIBUTE pub_attr[KEY_MAX_BOOL_ATTR_COUNT + 2];
@@ -2276,6 +2492,16 @@ static CK_RV generate_asymmetric_key(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
                 &pub_acount);
         if (rc) {
             fprintf(stderr, "Error setting RSA parameters!\n");
+            goto done;
+        }
+    } else if (kt == kt_DSA) {
+        printf("test\n");
+        rc = read_dsa_args(pub_attr, &pub_acount, dsa_file);
+        for (int i = 0; i < 3; i++)
+            dump_attr(&pub_attr[i]);
+        
+        if (rc != CKR_OK) {
+            fprintf(stderr, "Error parsing DSA parameters!\n");
             goto done;
         }
     } else if (kt == kt_EC) {
@@ -2344,6 +2570,10 @@ done:
         }
     }
 
+    free(a_prime);
+    free(a_subprime);
+    free(a_base);
+
     return rc;
 }
 /**
@@ -2351,7 +2581,8 @@ done:
  */
 static CK_RV generate_ckey(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
                            p11sak_kt kt, CK_ULONG keylength, char *ECcurve,
-                           CK_ULONG exponent, char *label, char *attr_string)
+                           CK_ULONG exponent, char *label, char *attr_string,
+                           char *dsa_file)
 {
     switch (kt) {
     case kt_DES:
@@ -2360,9 +2591,10 @@ static CK_RV generate_ckey(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
         return generate_symmetric_key(session, kt, keylength, label,
                 attr_string);
     case kt_RSAPKCS:
+    case kt_DSA:
     case kt_EC:
         return generate_asymmetric_key(session, slot, kt, keylength, exponent,
-                ECcurve, label, attr_string);
+                ECcurve, label, attr_string, dsa_file);
     default:
         fprintf(stderr, "Error: cannot create a key of type %i (%s)\n", kt, kt2str(kt));
         return CKR_ARGUMENTS_BAD;
@@ -2677,13 +2909,14 @@ done:
 static CK_RV execute_cmd(CK_SESSION_HANDLE session, CK_SLOT_ID slot,
                          p11sak_cmd cmd, p11sak_kt kt, CK_ULONG keylength,
                          CK_ULONG exponent, char *ECcurve, char *label,
-                         char *attr_string, int long_print, CK_BBOOL *forceAll)
+                         char *attr_string, int long_print, CK_BBOOL *forceAll, 
+                         char *dsa_file)
 {
     CK_RV rc;
     switch (cmd) {
     case gen_key:
         rc = generate_ckey(session, slot, kt, keylength, ECcurve, exponent,
-                label, attr_string);
+                label, attr_string, dsa_file);
         break;
     case list_key:
         rc = list_ckey(session, kt, long_print);
@@ -2825,6 +3058,7 @@ int main(int argc, char *argv[])
     char *label = NULL;
     char *ECcurve = NULL;
     char *attr_string = NULL;
+    char *dsa_file = NULL;
     CK_ULONG keylength = 0;
     CK_RV rc = CKR_OK;
     CK_SESSION_HANDLE session;
@@ -2850,10 +3084,12 @@ int main(int argc, char *argv[])
 
     /* Parse command args */
     rc = parse_cmd_args(cmd, argv, argc, &kt, &keylength, &ECcurve, &slot, &pin,
-            &exponent, &label, &attr_string, &long_print, &forceAll);
+            &exponent, &label, &attr_string, &long_print, &forceAll, &dsa_file);
     if (rc != CKR_OK) {
         goto done;
     }
+
+    printf("file: %s\n", dsa_file);
 
     /* now try to load the pkcs11 lib (will exit(99) on failure) */
     load_pkcs11lib();
@@ -2897,7 +3133,7 @@ int main(int argc, char *argv[])
 
     /* Execute command */
     rc = execute_cmd(session, slot, cmd, kt, keylength, exponent, ECcurve,
-            label, attr_string, long_print, &forceAll);
+            label, attr_string, long_print, &forceAll, dsa_file);
     if (rc == CKR_CANCEL) {
         fprintf(stderr, "Cancel execution: p11sak %s command (error code 0x%lX: %s)\n", cmd2str(cmd), rc,
                 p11_get_ckr(rc));

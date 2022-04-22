@@ -23,6 +23,7 @@ typedef enum {
     kt_3DES,
     kt_AES,
     kt_RSAPKCS,
+    kt_DSA,
     kt_EC,
     kt_GENERIC,
     kt_SECRET,

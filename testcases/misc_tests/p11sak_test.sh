@@ -31,6 +31,9 @@ P11SAK_AES_POST=p11sak-aes-post.out
 P11SAK_RSA_PRE=p11sak-rsa-pre.out
 P11SAK_RSA_LONG=p11sak-rsa-long.out
 P11SAK_RSA_POST=p11sak-rsa-post.out
+P11SAK_DSA_PRE=p11sak-dsa-pre.out
+P11SAK_DSA_LONG=p11sak-dsa-long.out
+P11SAK_DSA_POST=p11sak-dsa-post.out
 P11SAK_EC_PRE=p11sak-ec-pre.out
 P11SAK_EC_LONG=p11sak-ec-long.out
 P11SAK_EC_POST=p11sak-ec-post.out
@@ -62,6 +65,8 @@ p11sak generate-key aes 256 --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-a
 p11sak generate-key rsa 1024 --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-rsa-1024
 p11sak generate-key rsa 2048 --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-rsa-2048
 p11sak generate-key rsa 4096 --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-rsa-4096
+# rsa [1024]
+p11sak generate-key dsa --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-dsa
 # ec [prime256v1 | secp384r1 | secp521r1]
 p11sak generate-key ec prime256v1 --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-ec-prime256v1
 p11sak generate-key ec secp384r1 --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-ec-secp384r1
@@ -76,12 +81,14 @@ p11sak list-key des --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_DES_PRE
 p11sak list-key 3des --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_3DES_PRE
 p11sak list-key aes --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_AES_PRE
 p11sak list-key rsa --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_RSA_PRE
+p11sak list-key dsa --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_DSA_PRE
 p11sak list-key ec --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_EC_PRE
 
 p11sak list-key des --slot $SLOT --pin $PKCS11_USER_PIN --long &> $P11SAK_DES_LONG
 p11sak list-key 3des --slot $SLOT --pin $PKCS11_USER_PIN --long &> $P11SAK_3DES_LONG
 p11sak list-key aes --slot $SLOT --pin $PKCS11_USER_PIN --long &> $P11SAK_AES_LONG
 p11sak list-key rsa --slot $SLOT --pin $PKCS11_USER_PIN --long &> $P11SAK_RSA_LONG
+p11sak list-key dsa --slot $SLOT --pin $PKCS11_USER_PIN --long &> $P11SAK_DSA_LONG
 p11sak list-key ec --slot $SLOT --pin $PKCS11_USER_PIN --long &> $P11SAK_EC_LONG
 
 echo "** Now remove keys - 'p11sak_test.sh'"
@@ -105,6 +112,11 @@ p11sak remove-key rsa --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-rsa-409
 p11sak remove-key rsa --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-rsa-1024:prv -f
 p11sak remove-key rsa --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-rsa-2048:prv -f
 p11sak remove-key rsa --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-rsa-4096:prv -f
+# dsa [1024]
+# remove public key
+p11sak remove-key dsa --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-dsa:pub -f
+# remove private key
+p11sak remove-key dsa --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-dsa:prv -f
 # ec [prime256v1 | secp384r1 | secp521r1]
 #remove public key
 p11sak remove-key ec --slot $SLOT --pin $PKCS11_USER_PIN --label p11sak-ec-prime256v1:pub -f
@@ -124,6 +136,7 @@ p11sak list-key des --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_DES_POST
 p11sak list-key 3des --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_3DES_POST
 p11sak list-key aes --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_AES_POST
 p11sak list-key rsa --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_RSA_POST
+p11sak list-key dsa --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_DSA_POST
 p11sak list-key ec --slot $SLOT --pin $PKCS11_USER_PIN &> $P11SAK_EC_POST
 
 
@@ -397,6 +410,59 @@ echo "* TESTCASE list-key rsa FAIL Failed to list rsa public keys CK_BYTE attrib
 fi
 
 
+# check DSA public key
+grep -q 'p11sak-dsa:pub' $P11SAK_DSA_PRE
+rc=$?
+if [ $rc = 0 ]; then
+echo "* TESTCASE generate-key dsa PASS Generated random dsa public key"
+else
+echo "* TESTCASE generate-key dsa FAIL Failed to generate dsa public key"
+fi
+grep -v -q 'p11sak-dsa:pub' $P11SAK_DSA_POST
+rc=$?
+if [ $rc = 0 ]; then
+echo "* TESTCASE remove-key dsa PASS Deleted generated dsa public key"
+else
+echo "* TESTCASE remove-key dsa FAIL Failed to delete generated dsa public key"
+fi
+
+
+# check DSA private key
+grep -q 'p11sak-dsa:prv' $P11SAK_DSA_PRE
+rc=$?
+if [ $rc = 0 ]; then
+echo "* TESTCASE generate-key dsa PASS Generated random dsa private key"
+else
+echo "* TESTCASE generate-key dsa FAIL Failed to generate dsa private key"
+fi
+grep -v -q 'p11sak-dsa:prv' $P11SAK_DSA_POST
+rc=$?
+if [ $rc = 0 ]; then
+echo "* TESTCASE remove-key dsa PASS Deleted generated dsa private key"
+else
+echo "* TESTCASE remove-key dsa FAIL Failed to delete generated dsa private key"
+fi
+
+
+# CK_BBOOL
+if [[ $(grep -A 32 'p11sak-dsa:pub' $P11SAK_DSA_LONG | grep -c 'CK_TRUE') == "14" ]]; then
+echo "* TESTCASE list-key dsa PASS Listed random dsa public keys CK_BBOOL attribute"
+else
+echo "* TESTCASE list-key dsa FAIL Failed to list dsa public keys CK_BBOOL attribute"
+fi
+# CK_ULONG
+if [[ $(grep -A 32 'p11sak-dsa:pub' $P11SAK_DSA_LONG | grep -c 'CKA_MODULUS_BITS:') == "0" ]]; then
+echo "* TESTCASE list-key dsa PASS Listed random dsa public keys CK_ULONG attribute"
+else
+echo "* TESTCASE list-key dsa FAIL Failed to list dsa public keys CK_ULONG attribute"
+fi
+# CK_BYTE
+if [[ $(grep -A 32 'p11sak-dsa:pub' $P11SAK_DSA_LONG | grep -c 'CKA_MODULUS:') == "0" ]]; then
+echo "* TESTCASE list-key dsa PASS Listed random dsa public keys CK_BYTE attribute"
+else
+echo "* TESTCASE list-key dsa FAIL Failed to list dsa public keys CK_BYTE attribute"
+fi
+
 # check EC prime256v1 public key
 grep -q 'p11sak-ec-prime256v1:pub' $P11SAK_EC_PRE
 rc=$?
@@ -534,6 +600,9 @@ rm -f $P11SAK_AES_POST
 rm -f $P11SAK_RSA_PRE
 rm -f $P11SAK_RSA_LONG
 rm -f $P11SAK_RSA_POST
+rm -f $P11SAK_DSA_PRE
+rm -f $P11SAK_DSA_LONG
+rm -f $P11SAK_DSA_POST
 rm -f $P11SAK_EC_PRE
 rm -f $P11SAK_EC_LONG
 rm -f $P11SAK_EC_POST
